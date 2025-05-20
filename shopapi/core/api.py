@@ -11,9 +11,8 @@ from .models import ProductPhoto
 
 class GlobalAuth(HttpBasicAuth):
     def authenticate(self, request, username, password):
-        from django.contrib.auth import authenticate
         user = authenticate(username=username, password=password)
-        if user:
+        if user and user.is_active:
             return user
 
 api = NinjaAPI(auth=GlobalAuth())
@@ -57,12 +56,14 @@ router = Router()
 
 @router.get("/wishlist", response=List[WishListOutSchema])
 def get_wishlist(request):
+    request.user = request.auth
     wishlist = WishList.objects.filter(user=request.user)
     return [{"id": item.id, "product_id": item.product.id, "count": item.count} for item in wishlist]
 
 
 @router.post("/wishlist/add")
 def add_to_wishlist(request, data: WishListSchema):
+    request.user = request.auth
     product = get_object_or_404(Product, id=data.product_id)
     wishlist_item, created = WishList.objects.get_or_create(
         user=request.user,
@@ -77,6 +78,7 @@ def add_to_wishlist(request, data: WishListSchema):
 
 @router.post("/wishlist/remove")
 def remove_from_wishlist(request, data: WishListSchema):
+    request.user = request.auth
     product = get_object_or_404(Product, id=data.product_id)
     WishList.objects.filter(user=request.user, product=product).delete()
     return {"success": True}
@@ -87,6 +89,7 @@ from decimal import Decimal
 
 @router.get("/order", response=List[OrderOutSchema])
 def get_orders(request):
+    request.user = request.auth
     orders = Order.objects.filter(user=request.user)
     return [
         {
@@ -101,6 +104,7 @@ def get_orders(request):
 
 @router.post("/order")
 def create_order(request, data: OrderCreateSchema):
+    request.user = request.auth
     product = get_object_or_404(Product, id=data.product_id)
 
     total_price = product.price * data.count
@@ -126,6 +130,7 @@ class OrderStatusUpdateSchema(Schema):
 
 @router.put("/order/{order_id}")
 def update_order_status(request, order_id: int, data: OrderStatusUpdateSchema):
+    request.user = request.auth
     order = get_object_or_404(Order, id=order_id, user=request.user)
     order.status = data.status
     order.save()
@@ -134,6 +139,7 @@ def update_order_status(request, order_id: int, data: OrderStatusUpdateSchema):
 
 
 def manager_required(request):
+    request.user = request.auth
     if not request.user.is_authenticated:
         raise HttpError(401, "Вы не авторизованы")
     if not request.user.groups.filter(name__iexact="менеджеры").exists():
@@ -143,6 +149,7 @@ from django.contrib.auth.models import User
 
 @router.get("/users", response=List[UserOutSchema])
 def get_users(request):
+    request.user = request.auth
     manager_required(request)  # проверка доступа
     users = User.objects.all()
     return [{"id": u.id, "username": u.username, "email": u.email} for u in users]
@@ -151,6 +158,7 @@ from ninja import Query
 
 @router.get("/products", response=List[dict])
 def filter_products(request, filters: ProductFilterSchema = Query(...)):
+    request.user = request.auth
     products = Product.objects.all()
 
     if filters.min_price is not None:
@@ -177,6 +185,7 @@ from django.core.files.storage import default_storage
 
 @router.post("/products/{product_id}/upload_photo")
 def upload_photo(request, product_id: int, file: UploadedFile):
+    request.user = request.auth
     product = get_object_or_404(Product, id=product_id)
 
     photo = ProductPhoto.objects.create(
@@ -188,9 +197,20 @@ def upload_photo(request, product_id: int, file: UploadedFile):
 
 @router.get("/products/{product_id}/photos", response=List[str])
 def get_product_photos(request, product_id: int):
+    request.user = request.auth
     product = get_object_or_404(Product, id=product_id)
     return [photo.image.url for photo in product.photos.all()]
 
+@router.get("/products/{product_id}", response=dict)
+def get_product_by_id(request, product_id: int):
+    request.user = request.auth
+    product = get_object_or_404(Product, id=product_id)
+    return {
+        "id": product.id,
+        "name": product.name,
+        "description": product.description,
+        "price": float(product.price)
+    }
 
 api.add_router("/", router)
 
