@@ -47,6 +47,12 @@ class ProductFilterSchema(Schema):
     search_name: str = None
     search_description: str = None
 
+class OrderFromWishListItemSchema(Schema):
+    wishlist_item_id: int
+    count: int
+
+class OrderFromWishListSchema(Schema):
+    items: List[OrderFromWishListItemSchema]
 
 from django.shortcuts import get_object_or_404
 from ninja import Router
@@ -86,6 +92,52 @@ def remove_from_wishlist(request, data: WishListSchema):
 
 from datetime import datetime
 from decimal import Decimal
+
+
+@router.post("/order/from_wishlist")
+def create_order_from_wishlist(request, data: OrderFromWishListSchema):
+    request.user = request.auth
+    total_price = 0
+    order_items = []
+
+    for item in data.items:
+        wishlist_item = get_object_or_404(WishList, id=item.wishlist_item_id, user=request.user)
+
+        if item.count <= 0 or item.count > wishlist_item.count:
+            raise HttpError(400, f"Недопустимое количество для товара {wishlist_item.product.name}")
+
+        item_total = wishlist_item.product.price * item.count
+        total_price += item_total
+
+        order_items.append({
+            "wishlist_item": wishlist_item,
+            "count": item.count,
+            "price": wishlist_item.product.price
+        })
+
+    order = Order.objects.create(
+        user=request.user,
+        status='новый',
+        total=total_price
+    )
+
+    for item in order_items:
+        OrderProduct.objects.create(
+            order=order,
+            product=item["wishlist_item"].product,
+            price=item["price"],
+            count=item["count"]
+        )
+
+        wishlist_item = item["wishlist_item"]
+        if wishlist_item.count == item["count"]:
+            wishlist_item.delete()
+        else:
+            wishlist_item.count -= item["count"]
+            wishlist_item.save()
+
+    return {"order_id": order.id, "status": "created"}
+
 
 @router.get("/order", response=List[OrderOutSchema])
 def get_orders(request):
@@ -213,4 +265,3 @@ def get_product_by_id(request, product_id: int):
     }
 
 api.add_router("/", router)
-
